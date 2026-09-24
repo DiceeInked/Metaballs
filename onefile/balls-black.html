@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Animated Black Metaballs</title>
+  <style>
+    html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#000}
+    canvas{display:block;width:100vw;height:100vh;cursor:pointer}
+    #error{position:fixed;inset:0;display:grid;place-items:center;padding:24px;color:#00ffc8;background:#000;font:16px monospace;text-align:center}
+  </style>
+</head>
+<body>
+  <canvas id="canvas" aria-label="Animated black metaballs"></canvas>
+  <div id="error" hidden>WebGL is not available in this browser.</div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const MAX_BALLS = 60;
+      const SPEED = 4;
+      const canvas = document.getElementById('canvas');
+      const error = document.getElementById('error');
+      const gl = canvas.getContext('webgl', { alpha: false, antialias: false });
+
+      if (!gl) {
+        error.hidden = false;
+        return;
+      }
+
+      const vertexSource = `
+        attribute vec2 a_position;
+        void main() { gl_Position = vec4(a_position, 0.0, 1.0); }
+      `;
+
+      const fragmentSource = `
+        precision highp float;
+        #define MAX_BALLS 60
+        uniform int u_count;
+        uniform vec3 u_positionRadius[MAX_BALLS];
+        uniform vec3 u_color[MAX_BALLS];
+
+        void main() {
+          vec2 pixel = gl_FragCoord.xy;
+          float influenceTotal = 0.0;
+          vec3 weightedColor = vec3(0.0);
+
+          for (int i = 0; i < MAX_BALLS; i++) {
+            if (i >= u_count) break;
+            vec3 ball = u_positionRadius[i];
+            vec2 delta = pixel - ball.xy;
+            float distanceSquared = dot(delta, delta);
+            float influence = (ball.z * ball.z) / max(distanceSquared, 0.0001);
+            influenceTotal += influence;
+            weightedColor += u_color[i] * influence;
+          }
+
+          gl_FragColor = influenceTotal > 1.2
+            ? vec4(weightedColor / influenceTotal, 1.0)
+            : vec4(0.0, 0.0, 0.0, 1.0);
+        }
+      `;
+
+      function shader(type, source) {
+        const result = gl.createShader(type);
+        if (!result) throw new Error('Unable to create shader');
+        gl.shaderSource(result, source);
+        gl.compileShader(result);
+        if (!gl.getShaderParameter(result, gl.COMPILE_STATUS)) {
+          const message = gl.getShaderInfoLog(result);
+          gl.deleteShader(result);
+          throw new Error(message || 'Shader compilation failed');
+        }
+        return result;
+      }
+
+      function createProgram() {
+        const program = gl.createProgram();
+        if (!program) throw new Error('Unable to create WebGL program');
+        const vertex = shader(gl.VERTEX_SHADER, vertexSource);
+        const fragment = shader(gl.FRAGMENT_SHADER, fragmentSource);
+        gl.attachShader(program, vertex);
+        gl.attachShader(program, fragment);
+        gl.linkProgram(program);
+        gl.deleteShader(vertex);
+        gl.deleteShader(fragment);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          const message = gl.getProgramInfoLog(program);
+          gl.deleteProgram(program);
+          throw new Error(message || 'Program linking failed');
+        }
+        return program;
+      }
+
+      let program;
+      try {
+        program = createProgram();
+      } catch (exception) {
+        console.error(exception);
+        error.hidden = false;
+        return;
+      }
+
+      gl.useProgram(program);
+      gl.clearColor(0, 0, 0, 1);
+
+      const positionLocation = gl.getAttribLocation(program, 'a_position');
+      const countLocation = gl.getUniformLocation(program, 'u_count');
+      const positionRadiusLocation = gl.getUniformLocation(program, 'u_positionRadius');
+      const colorLocation = gl.getUniformLocation(program, 'u_color');
+      const buffer = gl.createBuffer();
+
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1, -1, 1, -1, -1, 1,
+        -1, 1, 1, -1, 1, 1
+      ]), gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(positionLocation);
+      gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
+
+      const positionRadius = new Float32Array(MAX_BALLS * 3);
+      const colors = new Float32Array(MAX_BALLS * 3);
+      const black = [0, 0, 0];
+      const balls = [];
+
+      const radiusFor = () => Math.max(Math.min(canvas.width, canvas.height) * 0.12, 60);
+
+      function addBall(x, y, popping = false) {
+        const radius = radiusFor();
+        const angle = Math.random() * Math.PI * 2;
+        balls.push({
+          x: x ?? Math.random() * Math.max(canvas.width - radius * 2, 1) + radius,
+          y: y ?? Math.random() * Math.max(canvas.height - radius * 2, 1) + radius,
+          vx: Math.cos(angle) * SPEED,
+          vy: Math.sin(angle) * SPEED,
+          baseRadius: radius,
+          currentRadius: popping ? radius * 1.8 : radius,
+          radiusVelocity: 0,
+          color: [...black]
+        });
+      }
+
+      addBall();
+      addBall();
+      addBall();
+
+      function resize() {
+        const oldWidth = canvas.width || window.innerWidth;
+        const oldHeight = canvas.height || window.innerHeight;
+        const ratio = Math.min(window.devicePixelRatio || 1, 2);
+        const width = Math.max(1, Math.floor(window.innerWidth * ratio));
+        const height = Math.max(1, Math.floor(window.innerHeight * ratio));
+        canvas.width = width;
+        canvas.height = height;
+        gl.viewport(0, 0, width, height);
+
+        const scaleX = width / oldWidth;
+        const scaleY = height / oldHeight;
+        for (const ball of balls) {
+          ball.x *= scaleX;
+          ball.y *= scaleY;
+          ball.baseRadius = radiusFor();
+          ball.currentRadius = Math.min(ball.currentRadius, ball.baseRadius * 1.8);
+        }
+      }
+
+      function update() {
+        for (const ball of balls) {
+          ball.radiusVelocity = (ball.radiusVelocity + (ball.baseRadius - ball.currentRadius) * 0.1) * 0.85;
+          ball.currentRadius += ball.radiusVelocity;
+          ball.x += ball.vx;
+          ball.y += ball.vy;
+
+          if (ball.x - ball.currentRadius <= 0 || ball.x + ball.currentRadius >= canvas.width) {
+            ball.x = Math.max(ball.currentRadius, Math.min(canvas.width - ball.currentRadius, ball.x));
+            ball.vx *= -1;
+          }
+          if (ball.y - ball.currentRadius <= 0 || ball.y + ball.currentRadius >= canvas.height) {
+            ball.y = Math.max(ball.currentRadius, Math.min(canvas.height - ball.currentRadius, ball.y));
+            ball.vy *= -1;
+          }
+        }
+      }
+
+      function render() {
+        const count = balls.length;
+        for (let i = 0; i < count; i++) {
+          const ball = balls[i];
+          const offset = i * 3;
+          positionRadius[offset] = ball.x;
+          positionRadius[offset + 1] = ball.y;
+          positionRadius[offset + 2] = ball.currentRadius;
+          colors[offset] = ball.color[0];
+          colors[offset + 1] = ball.color[1];
+          colors[offset + 2] = ball.color[2];
+        }
+
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.uniform1i(countLocation, count);
+        gl.uniform3fv(positionRadiusLocation, positionRadius);
+        gl.uniform3fv(colorLocation, colors);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+      }
+
+      function frame() {
+        update();
+        render();
+        requestAnimationFrame(frame);
+      }
+
+      canvas.addEventListener('click', event => {
+        if (balls.length >= MAX_BALLS) return;
+        const rect = canvas.getBoundingClientRect();
+        const x = (event.clientX - rect.left) * canvas.width / rect.width;
+        const y = (rect.bottom - event.clientY) * canvas.height / rect.height;
+        addBall(x, y, true);
+      });
+
+      window.addEventListener('resize', resize, { passive: true });
+      resize();
+      frame();
+    })();
+  </script>
+</body>
+</html>
