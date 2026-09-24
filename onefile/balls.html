@@ -205,10 +205,9 @@
             const mouseX = e.clientX - rect.left;
             const mouseY = canvas.height - (e.clientY - rect.top);
 
-            // Generate HSB parameters: H (0-1 random), S (0.75), B (1.0)
-            const randomColor = hsbToRgb(Math.random(), 0.75, 1.0);
-
-            const newBall = new Metaball(randomColor);
+            // Keep the original first three colors; spawned balls stay black.
+            const blackColor = { r: 0, g: 0, b: 0 };
+            const newBall = new Metaball(blackColor);
             newBall.x = mouseX;
             newBall.y = mouseY;
             
